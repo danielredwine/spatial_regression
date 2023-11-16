@@ -1,0 +1,340 @@
+---
+title: "Spatial Regression"
+author: "Daniel Redwine"
+output:
+  html_document:
+    toc: true # table of content true
+    toc_float:
+      collapsed: true
+    toc_depth: 2  # upto three depths of headings (specified by #, ## and ###)
+    number_sections: false  ## if you want number sections at each table header
+    theme: flatly  # many options for theme, this one is my favorite.
+---
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+packages <- c("biscale", "car", "cleangeo", "cowplot", "geosphere", "maps", 
+              "mapproj", "spatialreg", "spdep", "sf", "tidyverse","visreg","patchwork")
+sapply(packages, require, character.only=T) # obtaining and loading the required packages
+```
+
+# Introduction
+
+<li> This document contains examples of spatial regression analyses using socioeconomic predictors for the response of percentage of children living below the poverty line in Alabama counties.</li>
+<li> The dataset used in these examples can be obtained from github [here](https://raw.githubusercontent.com/chrismgentry/Spatial-Regression/master/Data/childpov18_southfull.csv).</li><br>
+
+```{r dataset, message=FALSE, warning=FALSE, echo=FALSE}
+# library(tidyverse)
+# Load in the dataset from github, change columns to appropriate numeric or character
+data <- read.csv('https://raw.githubusercontent.com/chrismgentry/Spatial-Regression/master/Data/childpov18_southfull.csv', 
+                 colClasses = c("character", "character", "character", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric"))
+
+data$FIPS <- sub("^", "0", data$FIPS )
+
+# Change column name
+names(data)[names(data)=="X2016.child.poverty"] <- "child.pov.2016"
+
+# Choose the subset of Alabama
+al_pov <- data %>% subset(State == "AL")
+
+# Look at summary of data 
+# summary(al_pov)
+
+# create the equation for the regression so we don't have to type it out every time
+equation <- child.pov.2016 ~ rural + urban + lnmanufacturing + lnag + 
+  lnretail + lnhealthss + lnconstruction + lnlesshs + 
+  lnunemployment + lnsinglemom + lnblack + lnhispanic + 
+  lnuninsured + lnincome_ratio + lnteenbirth + lnunmarried
+
+# Changing the number of significant figures
+options(scipen = 5)
+
+```
+# Analyses
+
+## <i><font color = "grey">Linear Regression</font color = "grey"></i>
+
+```{r linear regression, echo=FALSE, warning=FALSE, warning=FALSE}
+
+# equation for linear regression
+ols <- lm(equation, data=al_pov)
+summary(ols)
+```
+<li>Healthcare, unemployment, single mothers, and hispanic households are statistically significant predictors for the Ordinary Least Squares (OLS) Regression.</li>
+<li>R-squared=0.6828 and p<0.0001</li><br>
+
+```{r reg plots, message=FALSE, warning=FALSE, echo=FALSE, fig.show = "hold", out.width = "100%", fig.align = "center", fig.cap = "<b>Figure 1.</b> Regression plots for all predictors of child poverty."}
+par(mfrow=c(4,4), mar=c(1, 1, 1, 1))
+visreg(ols, labels= T)
+```
+
+```{r fips codes, message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+# library(maps)
+fips <- county.fips
+fips.codes <- separate(data = fips, col = polyname, into = c("state", "county"), sep = ",")
+al_fips <- subset(fips.codes, state=="alabama", select=fips)
+
+#library(sf)
+se_shp <- st_read(file.path("../data/se_counties.shp"))
+al_sf <-  se_shp %>% subset(STATE_NAME == "Alabama")
+
+#library(spdep
+neighb.data <- poly2nb(al_sf, queen=T)
+cont.neighb <- nb2listw(neighb.data,style="W", zero.policy = TRUE)
+```
+## <i><font color = "grey">Moran's Correlation Test</font color = "grey"></i>
+
+```{r morans, message=FALSE, echo=FALSE, warning=FALSE}
+lm.morantest(ols, cont.neighb)
+```
+<li>Our p-value is not significant (p > 0.05).</li>
+<li>We reject the alternative hypothesis that there is spatial dependency in our dataset.</li>
+<li>Therefore, the OLS Regression is the best analysis for this dataset.</li><br>
+
+## <i><font color = "grey">LaGrange Multiplier Test</font color = "grey"></i>
+
+```{r lagrange, echo=FALSE, message=FALSE, warning=FALSE}
+lm.LMtests(ols, cont.neighb, test="all")
+
+```
+<li>Our p-value is not significant (p > 0.05) for either the Spatially Lagged X Model or the Spatial Error Model.</li>
+<li>Therefore, the OLS Regression is a better fit for the data. 
+<li>However, we will run those models below for demonstration purposes.</li><br>
+
+## <i><font color = "grey">Spatially Lagged X Model</font color = "grey"></i>
+
+```{r slx mod, message=FALSE, echo=FALSE, warning=FALSE}
+#library(spatialreg)
+SLX.model <- spatialreg::lmSLX(equation, data=al_pov, cont.neighb)
+summary(SLX.model)
+```
+<li>Healthcare, unemployment, hispanic households, and neighboring region unmarried households are statistically significant for the Spatially Lagged X Model.</li>
+<li> R-squared=0.7238 and p<0.0001</li><br>
+
+```{r slx mod tab, message=FALSE, echo=FALSE, warning=FALSE}
+#library(spatialreg)
+
+summary(spatialreg::impacts(SLX.model, cont.neighb), zstats = TRUE)[["pzmat"]]
+
+```
+<li>The only significant impact is unmarried households.</li><br>
+
+## <i><font color = "grey">Spatial Lag Model</font color = "grey"></i>
+
+```{r slm mod, message=FALSE, warning=FALSE, echo=FALSE}
+
+sp.lag.model <- spatialreg::lagsarlm(equation, data=al_pov, cont.neighb)
+summary(sp.lag.model, Nagelkerke = TRUE)
+
+```
+<li>Healthcare, construction, single mothers, hispanic households, and income ratio are significant predictors for the Spatial Lag Model.</li>
+<li>R-squared=0.7702 and p>0.05</li><br>
+
+```{r slm mod im, message=FALSE, warning=FALSE, echo=FALSE}
+
+summary(spatialreg::impacts(sp.lag.model, listw = cont.neighb, R=100), zstats = TRUE)[["pzmat"]]
+
+```
+<li>Healthcare, construction, unempployment, single moms, hispanic households, and income ratio have significant impacts.</li><br>
+
+## <i><font color = "grey">Spatial Error Model</font color = "grey"></i>
+
+```{r spatial error, echo=FALSE, message=FALSE, warning=FALSE}
+sp.err.model <- spatialreg::errorsarlm(equation, data=al_pov, cont.neighb)
+summary(sp.err.model, Nagelkerke = TRUE)
+```
+<li>Rural, healthcare, unemployment, single mothers, hispanic households, and uninsured households were significant predictors of child poverty in the Spatial Error Model.</li>
+<li>R-sqared=0.7763 and p<0.05 </li><br>
+
+## <i><font color = "grey">Hausman Test</font color = "grey"></i>
+
+```{r Hausman Test, message=FALSE, warning=FALSE, echo=FALSE}
+spatialreg::Hausman.test(sp.err.model)
+```
+<li>We reject the null hypothesis that the estimation method yields coefficients acceptable for a standard error model due to p<0.05.</li>
+<li>A Standard Error Model may not be appropriate for this dataset as indicated above.</li><br>
+
+## <i><font color = "grey">Nested Spatial Durbin Models</font color = "grey"></i>
+
+```{r spatial durbin x, message=FALSE, warning=FALSE, echo=FALSE}
+sd.err <- spatialreg::errorsarlm(equation, al_pov, cont.neighb, etype = "emixed")
+sdm <- spatialreg::lagsarlm(equation, al_pov, cont.neighb, type = "mixed")
+
+summary(sd.err, Nagelkerke = TRUE)
+```
+<li>Results for the Spatial Durbin Error Model.</li><br>
+
+```{r durbin impacts, message=FALSE, warning=FALSE, echo=FALSE}
+summary(spatialreg::impacts(sd.err, listw = cont.neighb, R = 100), zstats = TRUE)[["pzmat"]]
+```
+<li>Retail, healthcare, less than high school education, single moms, black households, hispanic households, uninsured households, and unmarried households have significant impacts.</li><br>
+
+```{r likelihood ratio err, message=FALSE, warning=FALSE, echo=FALSE}
+spatialreg::LR.Sarlm(sd.err,sp.err.model)
+```
+<li>With p<0.05 we reject the null hypothesis, meaning that we should not restrict the model to a spatial error model.</li><br>
+
+## <i><font color = "grey">Distance Lag Model</font color = "grey"></i>
+
+```{r create k neighbor, echo=FALSE, message=FALSE, warning=FALSE}
+al.xy <- st_centroid(al_sf)
+
+#Create neighbors
+all.dist.k1 <- knn2nb(knearneigh(al.xy, k=1, longlat = TRUE))
+all.dist.k3 <- knn2nb(knearneigh(al.xy, k=3, longlat = TRUE))
+all.dist.k5 <- knn2nb(knearneigh(al.xy, k=5, longlat = TRUE))
+
+#Determine max k distance value to neighbor
+all.max.k1 <- max(unlist(nbdists(all.dist.k1, al.xy, longlat=TRUE)))
+all.max.k3 <- max(unlist(nbdists(all.dist.k3, al.xy, longlat=TRUE)))
+all.max.k5 <- max(unlist(nbdists(all.dist.k5, al.xy, longlat=TRUE)))
+
+#Calculate neighbors based on distance
+all.sp.dist.k1 <- dnearneigh(al.xy, d1=0, d2=1 * all.max.k1, longlat = TRUE)
+all.sp.dist.k3 <- dnearneigh(al.xy, d1=0, d2=1 * all.max.k3, longlat = TRUE)
+all.sp.dist.k5 <- dnearneigh(al.xy, d1=0, d2=1 * all.max.k5, longlat = TRUE)
+
+#Create neighbor list
+all.dist.neighb.k1 <- nb2listw(all.sp.dist.k1,style="W", zero.policy = TRUE)
+all.dist.neighb.k3 <- nb2listw(all.sp.dist.k3,style="W", zero.policy = TRUE)
+all.dist.neighb.k5 <- nb2listw(all.sp.dist.k5,style="W", zero.policy = TRUE)
+
+```
+
+```{r Distance Lag Model, message=FALSE, warning=FALSE, echo=FALSE}
+all.dist.lag.k1 <- spatialreg::lagsarlm(equation, data = al_pov, listw = all.dist.neighb.k1)
+all.dist.lag.k3 <- spatialreg::lagsarlm(equation, data = al_pov, listw = all.dist.neighb.k3)
+all.dist.lag.k5 <- spatialreg::lagsarlm(equation, data = al_pov, listw = all.dist.neighb.k5)
+
+summary(all.dist.lag.k1, Nagelkerke = TRUE)
+
+```
+<li>Distance Lag Model for K=1.</li><br>
+
+## <i><font color = "grey">Distance Error Model</font color = "grey"></i>
+
+```{r distance error model, message=FALSE, echo=FALSE, warning=FALSE}
+all.dist.err.k1 <- spatialreg::errorsarlm(equation, data = al_pov, listw = all.dist.neighb.k1)
+all.dist.err.k3 <- spatialreg::errorsarlm(equation, data = al_pov, listw = all.dist.neighb.k3)
+all.dist.err.k5 <- spatialreg::errorsarlm(equation, data = al_pov, listw = all.dist.neighb.k5)
+
+summary(all.dist.err.k1, Nagelkerke = TRUE)
+
+```
+<li>Distance Error Model for K=1.</li><br>
+
+# Results
+
+```{r linear regression result, echo=FALSE, warning=FALSE, warning=FALSE}
+
+# equation for linear regression
+ols <- lm(equation, data=al_pov)
+summary(ols)
+```
+<li>As determined in the analyses above, the OLS Regression was the best fit for the data.</li>
+<li>Healthcare, unemployment, single mother households, and hispanic households are significant predictors of child poverty for counties in Alabama.</li>
+<li>R-squared=0.6828 and p<0.0001</li><br>
+
+```{r I guess we should make a figure, echo=FALSE, message=FALSE, warning=FALSE, fig.show = "hold", out.width = "90%", fig.align = "center", fig.cap="<b>Figure 2.</b> Regression plots of healthcare, unemployment, single mothers, and hispanic households for the response of child poverty"}
+
+health_line <- ggplot(al_pov, aes(lnhealthss, child.pov.2016)) + 
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  ylab("Percent Child Poverty") +
+  xlab("ln Healthcare")
+ 
+
+unemployment_line <- ggplot(al_pov, aes(lnunemployment, child.pov.2016)) + 
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  ylab("Percent Child Poverty") +
+  xlab("ln Unemployment")
+
+single_line <- ggplot(al_pov, aes(lnsinglemom, child.pov.2016)) + 
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  ylab("Percent Child Poverty") +
+  xlab("ln Single Mother Households")
+
+hispanic_line <- ggplot(al_pov, aes(lnhispanic, child.pov.2016)) + 
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  ylab("Percent Child Poverty") +
+  xlab("ln Hispanic Households")
+
+health_line / single_line | unemployment_line / hispanic_line
+```
+<br><br>
+
+```{r map plot, message=FALSE, warning=FALSE, echo=FALSE, fig.show = "hold", out.width = "100%", fig.align = "center", fig.cap = "<b>Figure 3.</b> Bivarate map of child poverty and unemployment in Alabama counties."}
+dist.err.data <- summary(all.dist.err.k1, correlation=TRUE, Nagelkerke = TRUE)
+
+dist.err.output <- cbind.data.frame(al_pov$FIPS,
+                                    dist.err.data$fitted.values, 
+                                    dist.err.data$residual, 
+                                    al_pov$child.pov.2016, 
+                                    al_pov$lnsinglemom, 
+                                    al_pov$lnunemployment, 
+                                    al_pov$lnlesshs, 
+                                    al_pov$lnincome_ratio,
+                                    stringsAsFactors = FALSE)
+
+#Renaming columns
+colnames(dist.err.output) <- c("fips","fitted","resid","childpov",
+                               "single_mom","unemployment","less_hs","income_ratio")
+
+al_poly <- merge(x = al_sf, y = dist.err.output, 
+                 by.x = "FIPS", by.y = "fips", all = TRUE)
+
+#library(biscale)
+bivariate_data <- bi_class(al_poly, x = childpov, y = unemployment, 
+                           dim = 3, style = "quantile")
+
+legend <- bi_legend(pal = "DkCyan",
+                    dim = 3,
+                    xlab = "Child Poverty",
+                    ylab = "Unemployment",
+                    size = 7,
+                    ) + theme(plot.background = element_rect(fill='transparent', color=NA),
+panel.background = element_rect(fill='transparent', color = NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+world <- map_data("world")
+states <- map_data("state")
+southern_states <- subset(states, region %in% 
+                            c("texas", "arkansas", "louisiana", "mississippi", 
+                              "alabama", "georgia", "florida", "north carolina",
+                              "south carolina", "tennessee", "oklahoma", 
+                              "kentucky", "west virginia", "virginia", 
+                              "maryland", "delaware", "district of columbia"))
+
+mom_pov_map <- ggplot() + 
+  geom_polygon(data = world, aes(x=long,y=lat, group=group), fill = "gray95", color = "white") +
+  geom_polygon(data = states, aes(x=long,y=lat, group=group), fill = "gray95", color = "white") +
+  geom_polygon(data = southern_states, aes(x=long,y=lat, group=group), fill = NA, size = 1, color = "white") +  
+  geom_sf(data = bivariate_data, aes(fill = bi_class), color = "gray75", show.legend = FALSE) + 
+  bi_scale_fill(pal = "DkCyan", dim = 3) +
+  coord_sf(crs = 4326, xlim=c(-89,-83), ylim=c(30.25,35)) +
+  theme_void() + theme(legend.title.align=0.5) +
+  theme(panel.background = element_rect(fill = "lightskyblue1"),
+        panel.grid.major = element_line(colour = NA)) +
+  labs(x = "Longitude", y = "Latitude", fill = "Child Poverty")
+
+#library(cowplot)
+final_map <- ggdraw() +
+  draw_plot(mom_pov_map, 0, 0, 1, 1) +
+  draw_plot(legend, 0.6, 0.55, 0.25, 0.25)
+final_map
+
+
+```
+
